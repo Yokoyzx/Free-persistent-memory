@@ -48,7 +48,7 @@ Add these to your `~/.hermes/.env` (or `$HERMES_HOME/.env`):
 ```bash
 AGNES_API_KEY=sk-your-key-here
 AGNES_BASE_URL=https://apihub.agnes-ai.com/v1
-AGNES_MODEL=agnes-2.0-flash
+AGNES_MODEL=agnes-2.5-flash
 ```
 
 Get your key at [agnes-ai.com](https://agnes-ai.com/).
@@ -71,10 +71,11 @@ Get your key at [agnes-ai.com](https://agnes-ai.com/).
 Copy the plugin to Hermes' plugin directory:
 
 ```bash
-cp -r plugins/memory/mem0_local ~/.hermes/plugins/memory/
+mkdir -p "$HERMES_HOME/plugins/mem0_local"
+cp plugins/memory/mem0_local/__init__.py "$HERMES_HOME/plugins/mem0_local/__init__.py"
 ```
 
-Or create `~/.hermes/plugins/memory/mem0_local/__init__.py` with content from [`plugins/memory/mem0_local/__init__.py`](plugins/memory/mem0_local/__init__.py).
+Or create `$HERMES_HOME/plugins/mem0_local/__init__.py` with content from [`plugins/memory/mem0_local/__init__.py`](plugins/memory/mem0_local/__init__.py).
 
 ### 5. Activate
 
@@ -101,6 +102,8 @@ Once active, Hermes gains these tools:
 | `mem0_profile` | List all stored memories |
 | `mem0_search` | Semantic search across memories |
 | `mem0_conclude` | Store a fact verbatim |
+| `mem0_update` | Replace a memory by ID |
+| `mem0_delete` | Delete a memory by ID |
 
 Memories are automatically extracted from conversations and recalled before each turn.
 
@@ -110,7 +113,7 @@ You can swap the fact-extraction LLM to any OpenAI-compatible provider without c
 
 | Provider | Model Example | Config |
 |----------|--------------|--------|
-| **[Agnes AI](https://agnes-ai.com/)** (default) | `agnes-2.0-flash` | `AGNES_API_KEY`, `AGNES_BASE_URL`, `AGNES_MODEL` |
+| **[Agnes AI](https://agnes-ai.com/)** (default) | `agnes-2.5-flash` | `AGNES_API_KEY`, `AGNES_BASE_URL`, `AGNES_MODEL` |
 | **Google Gemini** (free tier) | `gemini-2.0-flash` | [Get API key](https://aistudio.google.com/apikey) |
 | **Groq** (free tier) | `mixtral-8x7b-32768` | [Get API key](https://console.groq.com/keys) |
 | **DeepSeek** (cheap) | `deepseek-chat` | [Get API key](https://platform.deepseek.com/) |
@@ -151,7 +154,7 @@ rm -rf ~/.hermes/mem0_data/
 |------|---------|
 | `~/.hermes/.env` | Agnes API credentials |
 | `~/.hermes/mem0_local.json` | Provider config |
-| `~/.hermes/plugins/memory/mem0_local/` | Plugin code |
+| `$HERMES_HOME/plugins/mem0_local/` | Plugin code |
 | `~/.hermes/mem0_data/` | Local vector database |
 
 ## Acknowledgments

@@ -46,7 +46,7 @@ def main():
         "vector_store": {
             "provider": "qdrant",
             "config": {
-                "path": "/tmp/mem0_test_qdrant",
+                "path": os.path.join(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")), "mem0_test_qdrant"),
                 "embedding_model_dims": 512,
             },
         },
@@ -114,7 +114,7 @@ def main():
     # ------------------------------------------------------------------ 
     memory.close()
     import shutil
-    shutil.rmtree("/tmp/mem0_test_qdrant", ignore_errors=True)
+    shutil.rmtree(config["vector_store"]["config"]["path"], ignore_errors=True)
 
     print("All tests passed! 🎉")
 

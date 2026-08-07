@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -28,6 +29,36 @@ logger = logging.getLogger(__name__)
 # Circuit breaker
 _BREAKER_THRESHOLD = 5
 _BREAKER_COOLDOWN_SECS = 120
+
+# Keep Mem0 useful as a general work-memory layer while removing the two
+# highest-risk sources of pollution: Hermes' expanded skill bodies and
+# credentials accidentally present in a turn.  The built-in Hermes memory
+# remains responsible for the user profile; this provider is deliberately
+# additive and does not read or write that store.
+_SECRET_RE = re.compile(
+    r"(?i)\b(?:api[_ -]?key|token|secret|password|passwd|authorization|bearer)\b"
+    r"\s*[:=]\s*[^\s,;]+"
+)
+_OPENAI_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b")
+_SKILL_HEADER_RE = re.compile(
+    r'^\[IMPORTANT: The user has invoked the "([^"]+)" skill'
+)
+
+
+def _sanitize_memory_text(text: str) -> str:
+    """Redact common secrets before text is sent to Mem0/LLM extraction."""
+    if not text:
+        return ""
+    text = _SECRET_RE.sub(lambda m: m.group(0).split(":")[0].split("=")[0] + "=<redacted>", text)
+    return _OPENAI_KEY_RE.sub("<redacted-key>", text)
+
+
+def _skill_context(raw: str) -> str:
+    """Return a compact skill-use marker, never the expanded SKILL.md body."""
+    if not isinstance(raw, str) or not raw.startswith("[IMPORTANT: The user has invoked"):
+        return ""
+    match = _SKILL_HEADER_RE.match(raw)
+    return f"[SKILL_USAGE] invoked: {match.group(1)}" if match else "[SKILL_USAGE] invoked"
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +75,7 @@ def _load_config() -> dict:
     config = {
         "agnes_api_key": os.environ.get("AGNES_API_KEY", ""),
         "agnes_base_url": os.environ.get("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1"),
-        "agnes_model": os.environ.get("AGNES_MODEL", "agnes-2.0-flash"),
+        "agnes_model": os.environ.get("AGNES_MODEL", "agnes-2.5-flash"),
         "embedder_model": os.environ.get("MEM0_EMBEDDER_MODEL", "BAAI/bge-small-zh-v1.5"),
         "qdrant_path": "",
         "user_id": os.environ.get("MEM0_USER_ID", "hermes-user"),
@@ -108,6 +139,37 @@ CONCLUDE_SCHEMA = {
     },
 }
 
+UPDATE_SCHEMA = {
+    "name": "mem0_update",
+    "description": (
+        "Replace an existing Mem0 Local memory by ID. First obtain the ID with "
+        "mem0_search; use this to correct an inaccurate or outdated memory."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "memory_id": {"type": "string", "description": "Memory ID returned by mem0_search."},
+            "text": {"type": "string", "description": "Replacement memory text."},
+        },
+        "required": ["memory_id", "text"],
+    },
+}
+
+DELETE_SCHEMA = {
+    "name": "mem0_delete",
+    "description": (
+        "Permanently delete one obsolete, erroneous, or test-only Mem0 Local "
+        "memory by ID. First obtain the ID with mem0_search."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "memory_id": {"type": "string", "description": "Memory ID returned by mem0_search."},
+        },
+        "required": ["memory_id"],
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # MemoryProvider implementation
@@ -158,7 +220,7 @@ class Mem0LocalMemoryProvider(MemoryProvider):
         return [
             {"key": "agnes_api_key", "description": "Agnes API key", "secret": True, "required": True, "env_var": "AGNES_API_KEY"},
             {"key": "agnes_base_url", "description": "Agnes API base URL", "default": "https://apihub.agnes-ai.com/v1"},
-            {"key": "agnes_model", "description": "Agnes model name", "default": "agnes-2.0-flash"},
+            {"key": "agnes_model", "description": "Agnes model name", "default": "agnes-2.5-flash"},
             {"key": "embedder_model", "description": "Local embedding model", "default": "BAAI/bge-small-zh-v1.5"},
             {"key": "user_id", "description": "User identifier", "default": "hermes-user"},
             {"key": "agent_id", "description": "Agent identifier", "default": "hermes"},
@@ -272,6 +334,7 @@ class Mem0LocalMemoryProvider(MemoryProvider):
             "# Mem0 Local Memory\n"
             f"Active. User: {self._user_id}.\n"
             "Use mem0_search to find memories, mem0_conclude to store facts, "
+            "mem0_update and mem0_delete to manage memories by ID, and "
             "mem0_profile for a full overview."
         )
 
@@ -314,13 +377,43 @@ class Mem0LocalMemoryProvider(MemoryProvider):
         if self._is_breaker_open():
             return
 
+        # Keep a compact skill-use signal plus the actual instruction, but
+        # never embed the expanded SKILL.md body. Normal turns remain
+        # general-purpose work memory.
+        # MemoryManager normally passes a cleaned user_content.  The optional
+        # full message list still contains the original expanded turn, so use
+        # it to recover the skill name when available.
+        raw_for_skill = user_content
+        raw_messages = kwargs.get("messages") or []
+        if isinstance(raw_messages, list):
+            for message in raw_messages:
+                if isinstance(message, dict) and message.get("role") == "user":
+                    candidate = message.get("content")
+                    if isinstance(candidate, str) and candidate.startswith("[IMPORTANT: The user has invoked"):
+                        raw_for_skill = candidate
+                        break
+        skill_marker = _skill_context(raw_for_skill)
+        try:
+            from agent.skill_commands import extract_user_instruction_from_skill_message
+            clean_user = extract_user_instruction_from_skill_message(user_content)
+        except Exception:
+            clean_user = user_content
+        if clean_user is None:
+            clean_user = ""
+        clean_user = _sanitize_memory_text(clean_user)
+        clean_assistant = _sanitize_memory_text(assistant_content)
+        if not clean_user and not skill_marker:
+            return
+
         def _sync():
             try:
                 memory = self._get_memory()
-                messages = [
-                    {"role": "user", "content": user_content},
-                    {"role": "assistant", "content": assistant_content},
-                ]
+                messages = []
+                combined_user = "\n".join(x for x in (skill_marker, clean_user) if x)
+                if combined_user:
+                    messages.append({"role": "user", "content": combined_user})
+                if clean_assistant:
+                    messages.append({"role": "assistant", "content": clean_assistant})
                 memory.add(
                     messages,
                     user_id=self._user_id,
@@ -338,7 +431,7 @@ class Mem0LocalMemoryProvider(MemoryProvider):
         self._sync_thread.start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [PROFILE_SCHEMA, SEARCH_SCHEMA, CONCLUDE_SCHEMA]
+        return [PROFILE_SCHEMA, SEARCH_SCHEMA, CONCLUDE_SCHEMA, UPDATE_SCHEMA, DELETE_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         if self._is_breaker_open():
@@ -378,7 +471,7 @@ class Mem0LocalMemoryProvider(MemoryProvider):
                 self._record_success()
                 if not results or not results.get("results"):
                     return json.dumps({"result": "No relevant memories found."})
-                items = [{"memory": r.get("memory", ""), "score": r.get("score", 0)}
+                items = [{"id": r.get("id", ""), "memory": r.get("memory", ""), "score": r.get("score", 0)}
                          for r in results["results"]]
                 return json.dumps({"results": items, "count": len(items)})
             except Exception as e:
@@ -401,6 +494,33 @@ class Mem0LocalMemoryProvider(MemoryProvider):
             except Exception as e:
                 self._record_failure()
                 return tool_error(f"Failed to store: {e}")
+
+        elif tool_name == "mem0_update":
+            memory_id = args.get("memory_id", "")
+            text = args.get("text", "")
+            if not memory_id:
+                return tool_error("Missing required parameter: memory_id")
+            if not text:
+                return tool_error("Missing required parameter: text")
+            try:
+                result = memory.update(memory_id, text=_sanitize_memory_text(text))
+                self._record_success()
+                return json.dumps(result)
+            except Exception as e:
+                self._record_failure()
+                return tool_error(f"Update failed: {e}")
+
+        elif tool_name == "mem0_delete":
+            memory_id = args.get("memory_id", "")
+            if not memory_id:
+                return tool_error("Missing required parameter: memory_id")
+            try:
+                result = memory.delete(memory_id)
+                self._record_success()
+                return json.dumps(result)
+            except Exception as e:
+                self._record_failure()
+                return tool_error(f"Delete failed: {e}")
 
         return tool_error(f"Unknown tool: {tool_name}")
 

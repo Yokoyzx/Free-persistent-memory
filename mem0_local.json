@@ -1,6 +1,6 @@
 {
   "embedder_model": "BAAI/bge-small-zh-v1.5",
-  "user_id": "your-username",
+  "user_id": "hermes-user",
   "agent_id": "hermes",
   "rerank": false
 }

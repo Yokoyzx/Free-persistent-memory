@@ -85,7 +85,7 @@ DASHSCOPE_API_KEY=***   # 改为你的 DashScope API Key
 ```bash
 AGNES_API_KEY=***
 AGNES_BASE_URL=https://apihub.agnes-ai.com/v1
-AGNES_MODEL=agnes-2.0-flash
+AGNES_MODEL=agnes-2.5-flash
 ```
 
 **Google Gemini（需海外网络）：**
@@ -111,10 +111,11 @@ GOOGLE_API_KEY=***   # 从 https://aistudio.google.com/apikey 获取
 将插件复制到 Hermes 的插件目录：
 
 ```bash
-cp -r plugins/memory/mem0_local ~/.hermes/plugins/memory/
+mkdir -p "$HERMES_HOME/plugins/mem0_local"
+cp plugins/memory/mem0_local/__init__.py "$HERMES_HOME/plugins/mem0_local/__init__.py"
 ```
 
-或者将 [`plugins/memory/mem0_local/__init__.py`](plugins/memory/mem0_local/__init__.py) 的内容保存到 `~/.hermes/plugins/memory/mem0_local/__init__.py`。
+或者将 [`plugins/memory/mem0_local/__init__.py`](plugins/memory/mem0_local/__init__.py) 的内容保存到 `$HERMES_HOME/plugins/mem0_local/__init__.py`。
 
 ### 5. 激活
 
@@ -163,6 +164,8 @@ config_dict = {
 | `mem0_profile` | 列出所有存储的记忆 |
 | `mem0_search` | 语义搜索记忆 |
 | `mem0_conclude` | 保存一条事实性记忆 |
+| `mem0_update` | 按 ID 更新一条记忆 |
+| `mem0_delete` | 按 ID 删除一条记忆 |
 
 对话中的记忆会被自动提取，并在每次对话前自动召回。
 
@@ -188,7 +191,7 @@ rm -rf ~/.hermes/mem0_data/
 |------|------|
 | `~/.hermes/.env` | LLM API 凭证 |
 | `~/.hermes/mem0_local.json` | 提供者配置 |
-| `~/.hermes/plugins/memory/mem0_local/` | 插件代码 |
+| `$HERMES_HOME/plugins/mem0_local/` | 插件代码 |
 | `~/.hermes/mem0_data/` | 本地向量数据库 |
 
 ## 致谢

@@ -18,7 +18,7 @@ Set up a fully local, lightweight Mem0 instance as Hermes' external memory backe
 ```
 Hermes Agent
   └─ memory.provider = mem0_local
-       └─ plugins/memory/mem0_local/__init__.py   ← custom plugin
+       └─ $HERMES_HOME/plugins/mem0_local/__init__.py   ← custom plugin
             ├─ LLM:       Agnes (openai-compatible)
             ├─ Embedder:  fastembed + BAAI/bge-small-zh-v1.5 (30MB, 512d)
             └─ Vector DB: Qdrant on-disk (no server needed)
@@ -80,7 +80,7 @@ Adjust `user_id` to your name.
 
 ## Step 4: Install the Plugin
 
-Create the `mem0_local` memory provider plugin at `$HERMES_HOME/plugins/memory/mem0_local/__init__.py`:
+Create the `mem0_local` memory provider plugin at `$HERMES_HOME/plugins/mem0_local/__init__.py`:
 
 <details>
 <summary>Click to expand plugin code</summary>
@@ -311,6 +311,7 @@ class Mem0LocalMemoryProvider(MemoryProvider):
             "# Mem0 Local Memory\n"
             f"Active. User: {self._user_id}.\n"
             "Use mem0_search to find memories, mem0_conclude to store facts, "
+            "mem0_update and mem0_delete to manage memories by ID, and "
             "mem0_profile for a full overview."
         )
 
@@ -362,7 +363,7 @@ class Mem0LocalMemoryProvider(MemoryProvider):
         self._sync_thread.start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return [PROFILE_SCHEMA, SEARCH_SCHEMA, CONCLUDE_SCHEMA]
+        return [PROFILE_SCHEMA, SEARCH_SCHEMA, CONCLUDE_SCHEMA, UPDATE_SCHEMA, DELETE_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         if self._is_breaker_open():
@@ -394,7 +395,7 @@ class Mem0LocalMemoryProvider(MemoryProvider):
                 self._record_success()
                 if not results or not results.get("results"):
                     return json.dumps({"result": "No relevant memories found."})
-                items = [{"memory": r.get("memory", ""), "score": r.get("score", 0)} for r in results["results"]]
+                items = [{"id": r.get("id", ""), "memory": r.get("memory", ""), "score": r.get("score", 0)} for r in results["results"]]
                 return json.dumps({"results": items, "count": len(items)})
             except Exception as e:
                 self._record_failure()
@@ -411,6 +412,23 @@ class Mem0LocalMemoryProvider(MemoryProvider):
             except Exception as e:
                 self._record_failure()
                 return tool_error(f"Failed to store: {e}")
+        elif tool_name == "mem0_update":
+            memory_id = args.get("memory_id", "")
+            text = args.get("text", "")
+            if not memory_id:
+                return tool_error("Missing required parameter: memory_id")
+            if not text:
+                return tool_error("Missing required parameter: text")
+            result = memory.update(memory_id, text=_sanitize_memory_text(text))
+            return json.dumps(result)
+
+        elif tool_name == "mem0_delete":
+            memory_id = args.get("memory_id", "")
+            if not memory_id:
+                return tool_error("Missing required parameter: memory_id")
+            result = memory.delete(memory_id)
+            return json.dumps(result)
+
         return tool_error(f"Unknown tool: {tool_name}")
 
     def shutdown(self) -> None:
@@ -530,7 +548,7 @@ uv pip install mem0ai fastembed --python /path/to/hermes/python
 ```
 
 ### Provider not showing up
-- Verify the plugin file exists at `~/.hermes/plugins/memory/mem0_local/__init__.py`
+- Verify the plugin file exists at `$HERMES_HOME/plugins/mem0_local/__init__.py`
 - Run `hermes memory status` to check active provider
 - Start a _new_ Hermes session (`/reset` or exit and re-launch)
 
@@ -540,5 +558,5 @@ uv pip install mem0ai fastembed --python /path/to/hermes/python
 |------|---------|
 | `~/.hermes/.env` | `AGNES_API_KEY`, `AGNES_BASE_URL`, `AGNES_MODEL` |
 | `~/.hermes/mem0_local.json` | `embedder_model`, `user_id`, `agent_id`, `rerank` |
-| `~/.hermes/plugins/memory/mem0_local/__init__.py` | Plugin implementation |
+| `$HERMES_HOME/plugins/mem0_local/__init__.py` | Plugin implementation |
 | `~/.hermes/mem0_data/` | Qdrant + history data (can delete to reset) |
